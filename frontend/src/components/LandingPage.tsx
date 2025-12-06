@@ -299,7 +299,7 @@ const LandingPage = () => {
                             <span className="font-bold text-slate-900">RFP Manager</span>
                         </div>
                         <p className="text-slate-400 text-sm">
-                            © 2024 RFP Manager. Built for Aerchain SDE Assignment.
+                            © 2025 RFP Manager.
                         </p>
                     </div>
                 </div>
