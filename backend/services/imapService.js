@@ -58,10 +58,12 @@ exports.checkInboxForProposals = async () => {
 
             const rfps = await RFP.find({ status: 'open' });
             let matchedRfp = null;
+            const subjectLower = subject.toLowerCase();
 
             for (const rfp of rfps) {
-                if (subject.includes(rfp.title)) {
+                if (subjectLower.includes(rfp.title.toLowerCase())) {
                     matchedRfp = rfp;
+                    console.log(`[IMAP Service] Matched RFP: "${rfp.title}"`);
                     break;
                 }
             }

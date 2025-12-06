@@ -5,7 +5,7 @@ import { toast } from 'react-toastify';
 import {
     Mail, BarChart2, ArrowLeft, Trophy, AlertTriangle,
     Calendar, DollarSign, Package, Send, Plus, X, Loader2,
-    Sparkles, FileText, Award, ThumbsUp, Users, Zap, Building2, RefreshCw
+    Sparkles, FileText, Award, ThumbsUp, Users, Zap, Building2, RefreshCw, CheckSquare, Square
 } from 'lucide-react';
 
 const API_URL = 'http://localhost:5000/api';
@@ -32,6 +32,7 @@ const ComparisonView = () => {
     const [comparison, setComparison] = useState<any[]>([]);
     const [vendors, setVendors] = useState<any[]>([]);
     const [matchingVendors, setMatchingVendors] = useState<MatchingVendor[]>([]);
+    const [selectedVendorIds, setSelectedVendorIds] = useState<Set<string>>(new Set());
     const [loadingCompare, setLoadingCompare] = useState(false);
     const [showSimulateModal, setShowSimulateModal] = useState(false);
     const [simulateVendor, setSimulateVendor] = useState('');
@@ -61,7 +62,11 @@ const ComparisonView = () => {
             if (res.data.success) {
                 if (res.data.count > 0) {
                     toast.success(`Found ${res.data.count} new proposal(s)!`);
-                    fetchProposals();
+                    // Small delay to ensure DB has committed, then refresh
+                    setTimeout(async () => {
+                        await fetchProposals();
+                        await fetchRFP();
+                    }, 500);
                 } else {
                     toast.info('No new relevant emails found.');
                 }
@@ -95,8 +100,40 @@ const ComparisonView = () => {
         try {
             const res = await axios.get(`${API_URL}/rfps/${id}/matching-vendors`);
             setMatchingVendors(res.data);
+            setSelectedVendorIds(new Set(res.data.map((v: MatchingVendor) => v._id)));
         } catch (error) {
             console.error("Error fetching matching vendors:", error);
+        }
+    };
+
+    const toggleVendorSelection = (vendorId: string) => {
+        setSelectedVendorIds(prev => {
+            const next = new Set(prev);
+            if (next.has(vendorId)) {
+                next.delete(vendorId);
+            } else {
+                next.add(vendorId);
+            }
+            return next;
+        });
+    };
+
+    const selectAllVendors = () => {
+        setSelectedVendorIds(new Set(matchingVendors.map(v => v._id)));
+    };
+
+    const deselectAllVendors = () => {
+        setSelectedVendorIds(new Set());
+    };
+
+    const handleAwardVendor = async (vendorId: string) => {
+        if (!confirm('Award this vendor?')) return;
+        try {
+            await axios.post(`${API_URL}/rfps/${id}/award`, { vendorId });
+            toast.success('Vendor awarded!');
+            fetchRFP();
+        } catch (error) {
+            toast.error('Failed to award vendor');
         }
     };
 
@@ -116,15 +153,16 @@ const ComparisonView = () => {
     };
 
     const handleBulkSend = async () => {
-        if (!emailDraft || matchingVendors.length === 0) return;
+        if (!emailDraft || selectedVendorIds.size === 0) return;
 
-        if (!confirm(`Confirm sending to ${matchingVendors.length} vendors?`)) return;
+        const vendorsToSend = matchingVendors.filter(v => selectedVendorIds.has(v._id));
+        if (!confirm(`Confirm sending to ${vendorsToSend.length} vendors?`)) return;
 
         setSendingEmail(true);
         let sentCount = 0;
 
         try {
-            for (const vendor of matchingVendors) {
+            for (const vendor of vendorsToSend) {
                 let customizedBody = emailDraft.body;
                 let customizedSubject = emailDraft.subject;
 
@@ -149,12 +187,13 @@ const ComparisonView = () => {
             }
             toast.success(`Successfully sent ${sentCount} emails`);
             setMatchingVendors([]);
+            setSelectedVendorIds(new Set());
             setShowEmailModal(false);
             setEmailDraft(null);
             fetchRFP();
         } catch (error) {
             console.error("Bulk send error:", error);
-            toast.error(`Error sending emails. Sent ${sentCount}/${matchingVendors.length}.`);
+            toast.error(`Error sending emails. Sent ${sentCount}/${vendorsToSend.length}.`);
         } finally {
             setSendingEmail(false);
         }
@@ -207,8 +246,9 @@ const ComparisonView = () => {
         }
     };
 
+    const invitedVendorIds = new Set((rfp?.vendors || []).map((v: any) => v._id || v));
     const availableVendorsForProposal = vendors.filter(
-        v => !proposals.some(p => p.vendor?._id === v._id)
+        v => invitedVendorIds.has(v._id) && !proposals.some(p => p.vendor?._id === v._id)
     );
 
     if (!rfp) return (
@@ -299,62 +339,80 @@ const ComparisonView = () => {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-1 space-y-6">
-                    {/* Recommended Vendors Section */}
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                                <Sparkles className="w-5 h-5 text-yellow-500" /> Recommended Vendors
-                            </h2>
-                            {matchingVendors.length > 0 && (
-                                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold">
-                                    {matchingVendors.length} matches
-                                </span>
+                    {/* Recommended Vendors Section - Only show for draft RFPs */}
+                    {rfp.status === 'draft' && (
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                                    <Sparkles className="w-5 h-5 text-yellow-500" /> Invite Vendors
+                                </h2>
+                                {matchingVendors.length > 0 && (
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={selectAllVendors} className="text-xs text-blue-600 hover:underline">All</button>
+                                        <span className="text-slate-300">|</span>
+                                        <button onClick={deselectAllVendors} className="text-xs text-slate-500 hover:underline">None</button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {matchingVendors.length > 0 ? (
+                                <>
+                                    <div className="space-y-2 mb-4 max-h-[280px] overflow-y-auto">
+                                        {matchingVendors.map(v => (
+                                            <div
+                                                key={v._id}
+                                                onClick={() => toggleVendorSelection(v._id)}
+                                                className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedVendorIds.has(v._id)
+                                                    ? 'bg-blue-50 border-blue-300'
+                                                    : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                                                    }`}
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    {selectedVendorIds.has(v._id) ? (
+                                                        <CheckSquare className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                                                    ) : (
+                                                        <Square className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                                                    )}
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="font-bold text-slate-900 text-sm truncate">{v.name}</p>
+                                                        <p className="text-xs text-slate-500 truncate">{v.email}</p>
+                                                    </div>
+                                                    <span className="px-2 py-0.5 bg-emerald-600 text-white rounded-full text-[10px] font-bold flex-shrink-0">
+                                                        {v.matchScore} pts
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <button
+                                        onClick={handleReviewAndSend}
+                                        disabled={selectedVendorIds.size === 0}
+                                        className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-bold hover:from-blue-700 hover:to-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <Mail className="w-4 h-4" />
+                                        Send to {selectedVendorIds.size} Vendor{selectedVendorIds.size !== 1 ? 's' : ''}
+                                    </button>
+                                </>
+                            ) : (
+                                <div className="text-center py-8 text-slate-400">
+                                    <Building2 className="w-10 h-10 mx-auto mb-2 text-slate-300" />
+                                    <p className="text-sm font-medium">No matching vendors</p>
+                                    <p className="text-xs mt-1">Add product keywords to vendors</p>
+                                </div>
                             )}
                         </div>
+                    )}
 
-                        {matchingVendors.length > 0 ? (
-                            <>
-                                <div className="space-y-3 mb-4 max-h-[280px] overflow-y-auto">
-                                    {matchingVendors.map(v => (
-                                        <div key={v._id} className="p-3 bg-gradient-to-r from-emerald-50 to-white rounded-xl border border-emerald-100">
-                                            <div className="flex items-start justify-between mb-2">
-                                                <div>
-                                                    <p className="font-bold text-slate-900 text-sm">{v.name}</p>
-                                                    <p className="text-xs text-slate-500">{v.email}</p>
-                                                </div>
-                                                <span className="px-2 py-0.5 bg-emerald-600 text-white rounded-full text-[10px] font-bold">
-                                                    {v.matchScore} pts
-                                                </span>
-                                            </div>
-                                            <div className="flex flex-wrap gap-1">
-                                                {v.matchedProducts.slice(0, 3).map((p, i) => (
-                                                    <span key={i} className="text-[10px] bg-white border border-emerald-200 px-1.5 py-0.5 rounded text-emerald-700">
-                                                        {p}
-                                                    </span>
-                                                ))}
-                                                {v.matchedProducts.length > 3 && (
-                                                    <span className="text-[10px] text-slate-400">+{v.matchedProducts.length - 3}</span>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                                <button
-                                    onClick={handleReviewAndSend}
-                                    className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-bold hover:from-blue-700 hover:to-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20"
-                                >
-                                    <Mail className="w-4 h-4" />
-                                    Review & Send to All
-                                </button>
-                            </>
-                        ) : (
-                            <div className="text-center py-8 text-slate-400">
-                                <Building2 className="w-10 h-10 mx-auto mb-2 text-slate-300" />
-                                <p className="text-sm font-medium">No matching vendors</p>
-                                <p className="text-xs mt-1">Add product keywords to vendors</p>
+                    {/* Emails Sent Notice */}
+                    {rfp.status === 'open' && rfp.vendors?.length > 0 && (
+                        <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200">
+                            <div className="flex items-center gap-2 text-emerald-700">
+                                <Mail className="w-5 h-5" />
+                                <span className="font-semibold">Emails sent to {rfp.vendors.length} vendor(s)</span>
                             </div>
-                        )}
-                    </div>
+                            <p className="text-sm text-emerald-600 mt-1">Waiting for responses...</p>
+                        </div>
+                    )}
 
                     {/* Simulate Response Section */}
                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
@@ -423,8 +481,27 @@ const ComparisonView = () => {
                                 )}
                             </div>
                         </div>
+                        {/* Loading Overlay */}
+                        {loadingCompare && (
+                            <div className="mb-6 p-8 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl border border-blue-200 flex flex-col items-center justify-center">
+                                <Loader2 className="w-10 h-10 text-blue-600 animate-spin mb-4" />
+                                <p className="font-semibold text-blue-800">AI is analyzing proposals...</p>
+                                <p className="text-sm text-blue-600 mt-1">Comparing prices, delivery, and compliance</p>
+                            </div>
+                        )}
 
-                        {comparison.length > 0 && (
+                        {/* Awarded Vendor Banner */}
+                        {rfp.status === 'awarded' && rfp.selected_vendor && (
+                            <div className="mb-6 p-4 bg-gradient-to-r from-yellow-400 to-orange-400 rounded-2xl text-white flex items-center gap-3">
+                                <Trophy className="w-8 h-8" />
+                                <div>
+                                    <p className="font-bold text-lg">Awarded to: {rfp.selected_vendor.name}</p>
+                                    <p className="text-sm opacity-90">This RFP has been completed</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {comparison.length > 0 && !loadingCompare && (
                             <div className="mb-6 p-6 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl border border-blue-100">
                                 <div className="flex items-center gap-3 mb-4">
                                     <div className="p-2 bg-yellow-100 rounded-lg text-yellow-600">
@@ -445,12 +522,26 @@ const ComparisonView = () => {
                                                     </span>
                                                     <span className="font-bold text-slate-900">{c.vendor}</span>
                                                 </div>
-                                                <span className={`text-sm font-bold px-3 py-1 rounded-full ${c.score >= 80 ? 'bg-green-100 text-green-700' :
-                                                    c.score >= 60 ? 'bg-yellow-100 text-yellow-700' :
-                                                        'bg-red-100 text-red-700'
-                                                    }`}>
-                                                    {c.score}/100
-                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`text-sm font-bold px-3 py-1 rounded-full ${c.score >= 80 ? 'bg-green-100 text-green-700' :
+                                                        c.score >= 60 ? 'bg-yellow-100 text-yellow-700' :
+                                                            'bg-red-100 text-red-700'
+                                                        }`}>
+                                                        {c.score}/100
+                                                    </span>
+                                                    {rfp.status !== 'awarded' && (
+                                                        <button
+                                                            onClick={() => {
+                                                                const proposal = proposals.find(p => p.vendor?.name === c.vendor);
+                                                                if (proposal?.vendor?._id) handleAwardVendor(proposal.vendor._id);
+                                                            }}
+                                                            className="px-3 py-1 bg-gradient-to-r from-yellow-500 to-orange-500 text-white rounded-lg font-bold text-xs hover:from-yellow-600 hover:to-orange-600 transition-all flex items-center gap-1"
+                                                        >
+                                                            <Trophy className="w-3 h-3" />
+                                                            Award
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </div>
                                             <p className="text-sm text-slate-600 pl-8">{c.reason || c.recommendation}</p>
                                             {c.strengths && c.strengths.length > 0 && (
