@@ -237,7 +237,7 @@ for (item in rfp.items) {
 
 ### Assumptions
 
-1. **Single User**: No authentication required per assignment scope
+1. **Single User**: No authentication required
 2. **Email Format**: Vendors reply with subject containing RFP title
 3. **Text-Only Parsing**: Attachments (PDFs) not parsed in this version
 4. **Gmail**: Configured for Gmail SMTP/IMAP; other providers need config changes
